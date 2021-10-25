@@ -46,64 +46,56 @@ def get_recos(id, headers, timeout):
     return recolist
 
 
-# Get the mean for an animelist, and the stats required to calculate
-# the scoring for an anime recommendation
-# Returns the mean as an integer and the recolist(stats) as a list of list of dicts
-# recolist contains a list of items, which are lists of recommendations for an anime
-def get_stats(animelist, recolist):
+def sql_input_user(user, mydb, mycursor):
 
-    mean = 0
-    count = 0
-    animelist = sorted(animelist, key=lambda x:x["score"], reverse = True)
-    animelist = [ x for x in animelist if x["score"] != 0]
-    for key, group in itertools.groupby(animelist, lambda x:x["score"]):
-        s = len(list(group))
-        count += s
-        mean += s * key
-    mean = math.floor(mean/count)
-
-    for recos in recolist:
-        if recos != "NONE":
-            total_recos = sum([ reco["recommendation_count"] for reco in recos])
-            for reco in recos:
-                reco["recommendation_count"] = reco["recommendation_count"] * reco["recommendation_count"] /total_recos
-
-    return mean, recolist
-
-def sql_input_user(mydb, mycursor):
-
-    user = input("$ Enter a user >>> ")
     sql = "SELECT userID FROM users WHERE name = '" + user + "'"
     mycursor.execute(sql)
-    myresult = mycursor.fetchall()
-    if myresult:
-        userID = myresult[0][0]
-    if not myresult:
+    myresult = mycursor.fetchone()
+    if myresult is None:
         sql_add = "INSERT INTO users(name) VALUES('" + user + "')"
         mycursor.execute(sql_add)
         mydb.commit()
         sql = "SELECT userID FROM users WHERE name = '" + user + "'"
         mycursor.execute(sql)
-        myresult = mycursor.fetchall()
-        userID = myresult[0][0]
+        myresult = mycursor.fetchone()
+        userID = myresult[0]
+    else:
+        userID = myresult[0]
 
     return userID
 
-def sql_get_animetitle(malID, mydb, mycursor):
 
-    sql = "SELECT title FROM anime WHERE malID = " + str(malID)
+def sql_get_anime_details(malID, mydb, mycursor):
+
+    sql = "SELECT * FROM anime WHERE malID = " + str(malID)
     mycursor.execute(sql)
-    myresult = mycursor.fetchall()
-    title = myresult[0][0]
-    return title
+    myresult = mycursor.fetchone()
+    return myresult
 
-def sql_get_user(userID, mydb, mycursor):
+def sql_get_animelist_score(malID, userID, mydb, mycursor):
 
-    sql = "SELECT name FROM users WHERE userID = " + str(userID)
+    sql = "SELECT score FROM animelists WHERE malID = " + str(malID) + " AND userID = " + str(userID)
     mycursor.execute(sql)
-    myresult = mycursor.fetchall()
-    name = myresult[0][0]
-    return name
+    myresult = mycursor.fetchone()
+    score = myresult[0]
+    return score
+
+
+def sql_insert_into_table(table, vals, mydb, mycursor):
+
+    if table == 'anime':
+        sql = "SELECT * FROM anime WHERE malID = " + str(vals[0])
+    if table == 'animelists':
+        sql = "SELECT * FROM animelists WHERE malID = " + str(vals[0]) + " AND userID = " + str(vals[1])
+    if table == 'recolists':
+         sql = "SELECT * FROM recolists WHERE recoID = " + str(vals[0]) + " AND forID = " + str(vals[1])
+    mycursor.execute(sql)
+    myresult = mycursor.fetchone()
+    if myresult is None:
+        sql_add = "INSERT INTO " + table + " VALUES" + str(vals)
+        print(sql_add)
+        mycursor.execute(sql_add)
+        mydb.commit()
 
 
 # The main function which is called first
@@ -126,8 +118,8 @@ def menu():
         'x-rapidapi-key': "72f87896d3msh622499ddf3ab002p1c35b1jsn11141231d626"
         }
 
-    userID = sql_input_user(mydb, mycursor)
-    user = sql_get_user(userID, mydb, mycursor)
+    user = input("$ Enter a user >>> ")
+    userID = sql_input_user(user, mydb, mycursor)
 
     while True:
 
@@ -146,24 +138,18 @@ def menu():
         print("+----------------------------------+\n")
         choice = input("$ Enter your choice >>> ")
 
-
-        if choice == '7':
-
-            userID = sql_input_user(mydb, mycursor)
-
-
         # Import the user's animelist and store it into animelist.json file
         if choice == '1':
 
             animelist = get_animelist(user, headers)
-            anime_vals = [(x["mal_id"], x["title"]) for x in animelist]
+            anime_vals = [(x["mal_id"], x["title"], 0) for x in animelist]
+            for i in anime_vals:
+                sql_insert_into_table('anime', i, mydb, mycursor)
+
             animelist_vals = [(x["mal_id"], userID , x["score"]) for x in animelist]
-            sql = "INSERT INTO anime (malID, title) VALUES (%s, %s)"
-            mycursor.executemany(sql, anime_vals)
-            mydb.commit()
-            sql = "INSERT INTO animelists VALUES (%s, %s, %s)"
-            mycursor.executemany(sql, animelist_vals)
-            mydb.commit()
+            for i in animelist_vals:
+                sql_insert_into_table('animelists', i, mydb, mycursor)
+
             length = len(animelist)
 
             print("  Added (" + str(length) + ") entries")
@@ -177,7 +163,7 @@ def menu():
             sql = "SELECT malID FROM animelists WHERE userID = " + str(userID)
             mycursor.execute(sql)
             myresult = mycursor.fetchall()
-            animelist = [[x[0], sql_get_animetitle(x[0],mydb,mycursor)] for x in myresult]
+            animelist = [[x[0], sql_get_anime_details(x[0],mydb,mycursor)[1]] for x in myresult]
 
             skip = 0
             done = 0
@@ -187,39 +173,35 @@ def menu():
 
                 recos = get_recos(anime[0], headers, 5)
                 if recos:
+
                     if recos[0] == "TMT":
+
                         print("  [SKIP]\t" + str(anime[0]) + "\t" + str(anime[1]))
                         skip += 1
-                        sql = "INSERT INTO recolists VALUES (%s, %s, %s, %s)"
                         recolist_vals = (anime[0], anime[0], 0, "SKIP")
-                        mycursor.execute(sql, recolist_vals)
-                        mydb.commit()
+                        sql_insert_into_table('recolists', recolist_vals, mydb, mycursor)
+
                     else:
+
                         print("  [DONE]\t" + str(anime[0]) + "\t" + str(anime[1]))
                         done += 1
+
                         for x in recos:
-                            sql2 = "SELECT * FROM anime WHERE malID = " + str(x["mal_id"])
-                            mycursor.execute(sql2)
-                            myresult = mycursor.fetchall()
-                            if not myresult:
-                                sql = "INSERT INTO anime (malID, title) VALUES (%s, %s)"
-                                anime_vals = (x["mal_id"], x["title"])
-                                mycursor.execute(sql, anime_vals)
-                                mydb.commit()
-                        sql = "INSERT INTO recolists VALUES (%s, %s, %s, %s)"
+                            anime_vals = (x["mal_id"], x["title"], 0)
+                            sql_insert_into_table('anime', anime_vals, mydb, mycursor)
+
                         recolist_vals = [(x["mal_id"], anime[0], x["recommendation_count"], "DONE") for x in recos]
-                        mycursor.executemany(sql, recolist_vals)
-                        mydb.commit()
+                        for i in recolist_vals:
+                            sql_insert_into_table('recolists', i, mydb, mycursor)
+
                 if not recos:
+
                     print("  [NONE]\t" + str(anime[0]) + "\t" + str(anime[1]))
                     none += 1
-                    sql = "INSERT INTO recolists VALUES (%s, %s, %s, %s)"
                     recolist_vals = (anime[0], anime[0], 0, "NONE")
-                    mycursor.execute(sql, recolist_vals)
-                    mydb.commit()
+                    sql_insert_into_table('recolists', recolist_vals, mydb, mycursor)
 
-
-            print("  Added (" + str(done) + ") entries, Skipped (" + str(skip) + ") entries and Found (" + str(done) + ") null entries")
+            print("  Added (" + str(done) + ") entries, Skipped (" + str(skip) + ") entries and Found (" + str(none) + ") null entries")
 
 
         # Go through the skipped imports and try to import them again
@@ -229,41 +211,39 @@ def menu():
             sql = "SELECT forID FROM recolists WHERE status = 'SKIP'"
             mycursor.execute(sql)
             myresult = mycursor.fetchall()
-            animelist = [[x[0], sql_get_animetitle(x[0],mydb,mycursor)] for x in myresult]
+            animelist = [[x[0], sql_get_anime_details(x[0],mydb,mycursor)[1]] for x in myresult]
 
             for anime in animelist:
+
                 recos = get_recos(anime[0], headers, 5)
                 print(anime)
+
                 if recos:
+
                     if recos[0] == "TMT":
                         text = "[SKIP]"
+
                     else:
                         text = "[DONE]"
                         sql = "DELETE FROM recolists where forID = " + str(anime[0])
                         mycursor.execute(sql)
                         mydb.commit()
+
                         for x in recos:
-                            sql2 = "SELECT * FROM anime WHERE malID = " + str(x["mal_id"])
-                            mycursor.execute(sql2)
-                            myresult = mycursor.fetchall()
-                            if not myresult:
-                                sql = "INSERT INTO anime (malID, title) VALUES (%s, %s)"
-                                anime_vals = (x["mal_id"], x["title"])
-                                mycursor.execute(sql, anime_vals)
-                                mydb.commit()
-                        sql = "INSERT INTO recolists VALUES (%s, %s, %s, %s)"
+                            anime_vals = (x["mal_id"], x["title"], 0)
+                            sql_insert_into_table('anime', anime_vals, mydb, mycursor)
+
                         recolist_vals = [(x["mal_id"], anime[0], x["recommendation_count"], "DONE") for x in recos]
-                        mycursor.executemany(sql, recolist_vals)
-                        mydb.commit()
+                        for i in recolist_vals:
+                            sql_insert_into_table('recolists', i, mydb, mycursor)
+
                 if not recos:
                     text = "[NONE]"
                     sql = "DELETE FROM recolists where forID = " + str(anime[0])
                     mycursor.execute(sql)
                     mydb.commit()
-                    sql = "INSERT INTO recolists VALUES (%s, %s, %s, %s)"
                     recolist_vals = (anime[0], anime[0], 0, "NONE")
-                    mycursor.execute(sql, recolist_vals)
-                    mydb.commit()
+                    sql_insert_into_table('recolists', recolist_vals, mydb, mycursor)
 
                 print("  " + text + " " + str(anime[0]) + "\t" + str(anime[1]))
 
@@ -285,106 +265,40 @@ def menu():
         # The first element is the anime name, and the second element is the recommendation score
         if choice == '4':
 
-            with open(animelist_file, 'r') as openfile:
-                animelist = json.load(openfile)
-            with open(recolist_file, 'r') as openfile:
-                recolist = json.load(openfile)
+            sql = "SELECT AVG(score) FROM animelists WHERE userID = " + str(userID)
+            mycursor.execute(sql)
+            myresult = mycursor.fetchone()
+            mean = myresult[0]
 
-            print("  Checking imported recommendations for flaws .....", end = ' ')
+            sql = "SELECT * FROM recolists WHERE status = 'DONE' AND recoID NOT IN (SELECT malID FROM animelists) AND forID IN (SELECT malID FROM animelists WHERE userID = " + str(userID) + ")"
+            mycursor.execute(sql)
+            myresult = mycursor.fetchall()
 
-            if True:
+            temp_reco = []
+            final_reco = []
 
-                print("DONE\n")
+            for reco in myresult:
 
-                mean, recolist = get_stats(animelist, recolist)
+                score_given = sql_get_animelist_score(reco[1], userID, mydb, mycursor)
+                score_given = score_given * score_given
+                score_given = score_given - (mean * mean)
+                score_given = score_given * reco[2]
+                temp_reco.extend([[score_given, reco[0]]])
 
-                for i in range(0,len(animelist)):
-                    recos = recolist[i]
-                    anime = animelist[i]
-                    if recos != "NONE":
-                        for reco in recos:
-                            score = (anime["score"] * anime["score"]) - (mean * mean)
-                            reco["score"] = score * reco["recommendation_count"]
+            for key, group in itertools.groupby(temp_reco, lambda x:x[1]):
+                score = sum([i[0] for i in group])
+                final_reco.extend([[score,key]])
 
-                list_json = json.dumps(recolist, indent = 4)
-                with open(recolist_file_temp, "w") as outfile:
-                    outfile.write(list_json)
+            final_reco = sorted(final_reco, key=lambda x:x[0], reverse = True)
 
-                recolist_temp = []
-                for item in recolist:
-                    if item != "NONE" and item != "SKIP":
-                        recolist_temp.extend(item)
-
-                recolist_temp = [item for item in recolist_temp if item["mal_id"] not in [anime["mal_id"] for anime in animelist]]
-                recolist_temp = [[anime["title"],anime["score"]] for anime in recolist_temp]
-                recolist_temp = sorted(recolist_temp, key=lambda x:x[0])
-
-                recolist_final = []
-                for key, group in itertools.groupby(recolist_temp, lambda x:x[0]):
-                    s = sum([reco[1] for reco in group])
-                    recolist_final.extend([[key,s]])
-
-                recolist_final = sorted(recolist_final, key=lambda x:x[1], reverse = True)
-
-                for reco in recolist_final[:100]:
-                    print("  " + str(reco[1]) + "\t" + str(reco[0]))
-
-                list_json = json.dumps(recolist_final, indent = 4)
-                with open(recommendation_file, "w") as outfile:
-                    outfile.write(list_json)
-
-            else:
-                print("ERROR")
+            for reco in final_reco[:100]:
+                print("  " + str(reco[0]) + "\t" + str(sql_get_anime_details(reco[1],mydb,mycursor)[1]))
 
 
-        if choice == '5':
+        if choice == '7':
 
-            while True:
-                id = input("\n$ Enter the anime id or (q) to quit >>> ")
-                if id == 'q':
-                    break
-                recolist = get_recos(id, headers, 60)
-                for item in recolist:
-                    print("  " + str(item))
-
-
-        if choice == '6':
-
-            with open(animelist_file, 'r') as openfile:
-                animelist = json.load(openfile)
-            with open(recolist_file, 'r') as openfile:
-                recolist = json.load(openfile)
-
-            print("  Checking imported recommendations for flaws .....", end = ' ')
-
-            if True:
-
-                print("DONE\n")
-
-                recolist_temp = []
-                for item in recolist:
-                    if item != "SKIP":
-                        recolist_temp.extend(item)
-
-                recolist_temp = [[anime["title"],anime["recommendation_count"]] for anime in recolist_temp]
-                recolist_temp = sorted(recolist_temp, key=lambda x:x[0])
-
-                recolist_final = []
-                for key, group in itertools.groupby(recolist_temp, lambda x:x[0]):
-                    s = sum([reco[1] for reco in group])
-                    recolist_final.extend([[key,s]])
-
-                recolist_final = sorted(recolist_final, key=lambda x:x[1], reverse = True)
-
-                for reco in recolist_final:
-                    print("  " + str(reco[1]) + "\t" + str(reco[0]))
-
-                list_json = json.dumps(recolist_final, indent = 4)
-                with open(network_file, "w") as outfile:
-                    outfile.write(list_json)
-
-            else:
-                print("ERROR")
+            user = input("$ Enter a user >>> ")
+            userID = sql_input_user(user, mydb, mycursor)
 
 
         if choice == '8' or choice == 'q':

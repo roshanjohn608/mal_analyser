@@ -60,13 +60,13 @@ def get_stats(animelist, recolist):
         s = len(list(group))
         count += s
         mean += s * key
-    mean = math.floor(mean/count)
+    mean = (mean/count)
 
-    for recos in recolist:
-        if recos != "NONE":
-            total_recos = sum([ reco["recommendation_count"] for reco in recos])
-            for reco in recos:
-                reco["recommendation_count"] = reco["recommendation_count"] * reco["recommendation_count"] /total_recos
+    #for recos in recolist:
+    #    if recos != "NONE":
+    #        total_recos = sum([ reco["recommendation_count"] for reco in recos])
+    #        for reco in recos:
+    #            reco["recommendation_count"] = reco["recommendation_count"] * reco["recommendation_count"] /total_recos
 
     return mean, recolist
 
@@ -257,6 +257,8 @@ def menu():
 
                 mean, recolist = get_stats(animelist, recolist)
 
+                print(mean)
+
                 for i in range(0,len(animelist)):
                     recos = recolist[i]
                     anime = animelist[i]
@@ -295,7 +297,7 @@ def menu():
             else:
                 print("ERROR")
 
-        
+
         if choice == '5':
 
             while True:
